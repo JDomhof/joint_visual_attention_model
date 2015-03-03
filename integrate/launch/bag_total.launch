@@ -32,19 +32,19 @@
 	</node><!-- -->
 
 	<!-- POINTING -->
-	<!--<node name="pointing_direction_clean" pkg="pointing_direction" type="hand_node" output="screen">
+	<node name="pointing_direction" pkg="pointing" type="hand_node" output="screen">
 		<param name ="hand" value = "L" />
 		<param name ="view3D" value = "false" />
 		<param name ="TwoDviewer" value = "false" />	
 		<param name ="handSize" value = "0.15" />	
 		<param name ="handPalmRatio" value = "1.9" />	
 		<param name ="numberOfMessages" value = "1" />	
-	</node> -->
+	</node> <!---->
 
-	<!--<node name="create_pointing_map" pkg="pointing_direction" type="create_pointing_map" output="screen">
+	<node name="create_pointing_map" pkg="pointing" type="create_pointing_map" output="screen">
 		<param name ="TwoDviewer" value = "false" />
 		<param name ="stdProbabilityMap" value = "10" />
-	</node> -->
+	</node><!-- -->
 
 	<!-- INTEGRATE -->
 	<node name="integrate" pkg="integrate" type="integrate" output="screen">
