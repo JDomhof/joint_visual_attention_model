@@ -21,7 +21,7 @@
 	</node> 
 
 	<!-- GAZE -->
-	<!-- <node name="gaze" pkg="gaze" type="probabilityMapHD" output="screen"> 
+	 <node name="gaze" pkg="gaze" type="probabilityMapHD" output="screen"> 
 		<param name ="WindowSize" value = "150" />
 		<param name ="useHD" value = "true" /> 
 		<param name ="SizeGaussianBlurFilter" value = "101" />
@@ -29,7 +29,7 @@
 		<param name ="minimalMatches" value = "15" />
 		<param name ="NumberOfMaps" value = "1" />
 		<param name ="stereoCalibrationData" value = "/home/joris/final_catkin_ws/src/gaze/cfg/stereo_calibration_parameters.yaml" />
-	</node> -->
+	</node> <!---->
 
 	<!-- INTEGRATE -->
 	<node name="integrate" pkg="integrate" type="integrate" output="screen">
