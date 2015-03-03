@@ -16,7 +16,7 @@ find_package(OpenCV REQUIRED)
 ## Declare a catkin package
 catkin_package(
   INCLUDE_DIRS include
-)
+ )
 
 ## Build 
 include_directories(
