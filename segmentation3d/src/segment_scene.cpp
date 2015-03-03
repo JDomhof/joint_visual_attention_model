@@ -177,6 +177,8 @@ public:
 	bool b2Dviewer;
 	bool b3Dviewer;
 	double dPassTroughDistance;
+	double dSetDistanceThreshold;
+	int dMimumIndicdesPlane, dMimumIndicdesobject;
 
 	pcl::PointCloud<pcl::PointXYZ> prev_cloud_;
 	pcl::PointCloud<pcl::Normal> prev_normals_;
@@ -192,6 +194,9 @@ public:
 		private_nh.param("TwoDviewer", b2Dviewer, false);
 		private_nh.param("ThreeDviewer", b3Dviewer, false);
 		private_nh.param("passTroughDistance", dPassTroughDistance, 2.0);
+		private_nh.param("setDistanceThreshold", dSetDistanceThreshold, 0.05);
+		private_nh.param("mimimumIndicdesPlane", dMimumIndicdesPlane, 1000);
+		private_nh.param("mimimumIndicdesObject", dMimumIndicdesobject, 100);
 
 		previous_data_size_ = 0;
 		previous_clusters_size_ = 0;
@@ -311,7 +316,7 @@ void ExtractObjectClusters::mainLoop() {
 			plane_labels.resize (label_indices.size (), false);
 			for (size_t i = 0; i < label_indices.size (); i++)
 			{
-				if (label_indices[i].indices.size () > 2000)  //TODO: Determine correct number of required indices
+				if (label_indices[i].indices.size () > dMimumIndicdesPlane)  //TODO: Determine correct number of required indices
 				{
 					plane_labels[i] = true;
 				}
@@ -320,7 +325,7 @@ void ExtractObjectClusters::mainLoop() {
 			euclidean_cluster_comparator_->setInputCloud (cloud_filtered.makeShared());
 			euclidean_cluster_comparator_->setLabels (labels);
 			euclidean_cluster_comparator_->setExcludeLabels (plane_labels);
-			euclidean_cluster_comparator_->setDistanceThreshold (0.1f, false); //TODO: check threshold
+			euclidean_cluster_comparator_->setDistanceThreshold (dSetDistanceThreshold, false); //TODO: check threshold
 
 			pcl::PointCloud<pcl::Label> euclidean_labels;
 			std::vector<pcl::PointIndices> euclidean_label_indices;
@@ -334,7 +339,7 @@ void ExtractObjectClusters::mainLoop() {
 			cloudOut.height = cloud.height;
 			cloudOut.width = cloud.width;
 			for (size_t i = 0; i < euclidean_label_indices.size (); i++) {
-				if (euclidean_label_indices[i].indices.size () > 50) {
+				if (euclidean_label_indices[i].indices.size () > dMimumIndicdesobject) {
 					//In clusters
 					pcl::PointCloud<pcl::PointXYZ> cluster;
 					pcl::copyPointCloud (cloud_filtered,euclidean_label_indices[i].indices,cluster);
@@ -422,7 +427,7 @@ int main(int argc, char** argv)
 	ros::init(argc, argv, "Extract_object_clusters");
 
 	ExtractObjectClusters object;
-	ros::Rate rate(5); // 5Hz
+	ros::Rate rate(1); // 5Hz
 
 	while (ros::ok())
 	{
