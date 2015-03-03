@@ -1,0 +1,42 @@
+<launch>
+	<node pkg="rosbag" type="play" name="rosbag" 
+		args="-l /home/joris/bagfiles/Only_pointing/Bastiaan_pointing_kinect_2.bag">
+		<remap from="/camera/depth_registered/points_filtered" to="/camera/depth_registered/points" />	
+		<remap from="/usb_cam/image_raw_filtered" to="/usb_cam/image_raw" />
+	</node><!---->
+
+
+	<!-- DEPTH SEGMENTATION -->
+	<node name="segmentation_3d" pkg="segmentation_3d" type="Extract_clusters" output="screen">	
+		<param name ="TwoDviewer" value = "false" />
+		<param name ="passTroughDistance" value = "1.3" />
+		<param name ="mimimumIndicdesObject" value = "200" />
+		<param name ="mimimumIndicdesPlane" value = "1000" />
+	</node> <!-- -->
+
+	<!-- POINTING -->
+	<!--<node name="pointing_direction_clean" pkg="pointing_direction" type="hand_node" output="screen">
+		<param name ="hand" value = "L" />
+		<param name ="view3D" value = "false" />
+		<param name ="TwoDviewer" value = "true" />	
+		<param name ="handSize" value = "0.12" />	
+		<param name ="handPalmRatio" value = "1.7" />	
+		<param name ="numberOfMessages" value = "1" />	
+	</node> -->
+
+	<!--<node name="create_pointing_map" pkg="pointing_direction" type="create_pointing_map" output="screen">
+		<param name ="TwoDviewer" value = "false" />
+		<param name ="stdProbabilityMap" value = "15" />
+	</node>-->
+
+	<!-- SALIENCY -->
+	<arg name="algorithm" value="Itti" />
+    	<node name="saliencymap$(arg algorithm)" pkg="saliency_detection" type="saliencyDetection$(arg algorithm)" output="screen">  
+		<remap from="/rgbimage_in" to="/camera/rgb/image_raw" />
+	</node> 
+
+	<!-- INTEGRATE -->
+	<node name="integrate" pkg="integrate" type="integrate" output="screen">
+		<param name ="addOrMultiply" value = "0" />
+	</node>  
+</launch>
