@@ -1,0 +1,53 @@
+<launch>	
+	 <node pkg="rosbag" type="play" name="rosbag" 
+		args="-l /home/joris/bagfiles/Total/Leon_total_eyetracker_3.bag 
+			 /home/joris/bagfiles/Total/Leon_total_kinect_3.bag">
+		<remap from="/camera/depth_registered/points_filtered" to="/camera/depth_registered/points" />	
+		<remap from="/usb_cam/image_raw_filtered" to="/usb_cam/image_raw" />
+	</node><!--	-->
+
+	<!-- GAZE -->
+	<node name="gaze" pkg="gaze" type="probabilityMapHD" output="screen"> 
+		<param name ="WindowSize" value = "150" />
+		<param name ="useHD" value = "true" /> 
+		<param name ="SizeGaussianBlurFilter" value = "101" />
+		<param name ="TwoDviewer" value = "false" />
+		<param name ="minimalMatches" value = "15" />
+		<param name ="NumberOfMaps" value = "1" />
+		<param name ="stereoCalibrationData" value = "/home/joris/final_catkin_ws/src/gaze/cfg/stereo_calibration_parameters.yaml" />
+	</node><!-- -->
+
+	<!-- DEPTH SEGMENTATION -->
+	<node name="segmentation_3d" pkg="segmentation_3d" type="Extract_clusters" output="screen">	
+		<param name ="TwoDviewer" value = "false" />
+		<param name ="passTroughDistance" value = "1.8" />
+		<param name ="mimimumIndicdesObject" value = "200" />
+		<param name ="mimimumIndicdesPlane" value = "1000" />
+	</node><!--  -->
+
+	<!-- SALIENCY -->
+	<arg name="algorithm" value="Itti" />
+    	<node name="saliencymap$(arg algorithm)" pkg="saliency_detection" type="saliencyDetection$(arg algorithm)" output="screen">  
+		<remap from="/rgbimage_in" to="/camera/rgb/image_raw" />
+	</node><!-- -->
+
+	<!-- POINTING -->
+	<!--<node name="pointing_direction_clean" pkg="pointing_direction" type="hand_node" output="screen">
+		<param name ="hand" value = "L" />
+		<param name ="view3D" value = "false" />
+		<param name ="TwoDviewer" value = "false" />	
+		<param name ="handSize" value = "0.15" />	
+		<param name ="handPalmRatio" value = "1.9" />	
+		<param name ="numberOfMessages" value = "1" />	
+	</node> -->
+
+	<!--<node name="create_pointing_map" pkg="pointing_direction" type="create_pointing_map" output="screen">
+		<param name ="TwoDviewer" value = "false" />
+		<param name ="stdProbabilityMap" value = "10" />
+	</node> -->
+
+	<!-- INTEGRATE -->
+	<node name="integrate" pkg="integrate" type="integrate" output="screen">
+		<param name ="addOrMultiply" value = "0" />
+	</node> <!--  -->
+</launch>
