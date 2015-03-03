@@ -95,6 +95,7 @@ public:
 	visualization_msgs::Marker skelet;
 	pcl::PointCloud<pcl::PointXYZ> cloud;
 	sensor_msgs::CameraInfo cameraInfo;
+	sensor_msgs::PointCloud2 cloudMsg;
 	cv_bridge::CvImagePtr cv_ptr_kinect;
 
 	int iHand, iElbow;
@@ -181,6 +182,7 @@ void Hand::callbackPCL(const sensor_msgs::PointCloud2ConstPtr& cloud_in) {
 	pcl::PCLPointCloud2 pcl_pc;
 	pcl_conversions::toPCL(*cloud_in, pcl_pc);
 	pcl::fromPCLPointCloud2(pcl_pc, cloud);
+	cloudMsg = *cloud_in;
 }
 void Hand::callbackSkelet(const visualization_msgs::MarkerConstPtr& markers) {
 	skelet = *markers;
@@ -260,200 +262,225 @@ void Hand::mainLoopPointingDirection() {
 	pcl::PointCloud<pcl::PointXYZ> hand;
 
 	clock_t start = clock();
-	if(skelet.points.size()>0) {
-		imageKinect.copyTo(imageKinectWithCoordinates);
+	if(skelet.points.size()>0 && cloud.points.size()>0) {
+		double dStampCloudMsg = (double)cloudMsg.header.stamp.nsec/1000000000;
+		double dStampSkeletMsg = (double)(skelet.header.stamp.sec -  cloudMsg.header.stamp.sec) + (double)skelet.header.stamp.nsec/1000000000;
 
-		//Markers are in other framework thus transform them to depth_registered pointcloud reference frame
-		Eigen::Vector3f T; T << -skelet.points[iHand].y, -skelet.points[iHand].z, skelet.points[iHand].x;
-		Eigen::Vector3f Elbow; Elbow << -skelet.points[iElbow].y, -skelet.points[iElbow].z, skelet.points[iElbow].x;
+		if((dStampSkeletMsg - dStampCloudMsg) < 1.0){ //Only continue if time difference is smaller than 1.0seconds
+			imageKinect.copyTo(imageKinectWithCoordinates);
 
-		previous_hand_positions.erase(previous_hand_positions.begin());
-		previous_hand_positions.push_back(T);
+			//Markers are in other framework thus transform them to depth_registered pointcloud reference frame
+			Eigen::Vector3f T; T << -skelet.points[iHand].y, -skelet.points[iHand].z, skelet.points[iHand].x;
+			Eigen::Vector3f Elbow; Elbow << -skelet.points[iElbow].y, -skelet.points[iElbow].z, skelet.points[iElbow].x;
 
-		if (previous_hand_positions.at(0) != Eigen::Vector3f(0,0,0)) {
-			Eigen::Vector3f sum  = std::accumulate(previous_hand_positions.begin(), previous_hand_positions.end(), Eigen::Vector3f(0.0, 0.0, 0.0));
-			Eigen::Vector3f meanHandPosition = sum/ previous_hand_positions.size(); //(sum.x / previous_hand_positions.size(), sum.y / previous_hand_positions.size(), sum.z / previous_hand_positions.size());
+			previous_hand_positions.erase(previous_hand_positions.begin());
+			previous_hand_positions.push_back(T);
 
-			m.resize(3,4);
-			m << cameraInfo.P[0],cameraInfo.P[1],cameraInfo.P[2],cameraInfo.P[3],cameraInfo.P[4],cameraInfo.P[5],cameraInfo.P[6],cameraInfo.P[7],cameraInfo.P[8],cameraInfo.P[9],cameraInfo.P[10],cameraInfo.P[11];
+			if (previous_hand_positions.at(0) != Eigen::Vector3f(0,0,0)) {
+				Eigen::Vector3f sum  = std::accumulate(previous_hand_positions.begin(), previous_hand_positions.end(), Eigen::Vector3f(0.0, 0.0, 0.0));
+				Eigen::Vector3f meanHandPosition = sum/ previous_hand_positions.size(); //(sum.x / previous_hand_positions.size(), sum.y / previous_hand_positions.size(), sum.z / previous_hand_positions.size());
 
-			Eigen::VectorXf elbow2d(4); elbow2d << Elbow.x(), Elbow.y(), Elbow.z(), 1.0;
-			Eigen::Vector3f p1_elbow2d = m*elbow2d;  p1_elbow2d = p1_elbow2d/p1_elbow2d.z();
-			circle(imageKinectWithCoordinates, cv::Point2f(p1_elbow2d.x(), p1_elbow2d.y()), 8, Scalar(0,0,255), -1, 8 );
+				m.resize(3,4);
+				m << cameraInfo.P[0],cameraInfo.P[1],cameraInfo.P[2],cameraInfo.P[3],cameraInfo.P[4],cameraInfo.P[5],cameraInfo.P[6],cameraInfo.P[7],cameraInfo.P[8],cameraInfo.P[9],cameraInfo.P[10],cameraInfo.P[11];
 
-			Eigen::VectorXf hand2d(4); hand2d << meanHandPosition.x(), meanHandPosition.y(), meanHandPosition.z(), 1.0;
-			Eigen::Vector3f p1_hand2d = m*hand2d;  p1_hand2d = p1_hand2d/p1_hand2d.z();
-			circle(imageKinectWithCoordinates, cv::Point2f(p1_hand2d.x(), p1_hand2d.y()), 8, Scalar(0,0,255), -1, 8 );
+				Eigen::VectorXf elbow2d(4); elbow2d << Elbow.x(), Elbow.y(), Elbow.z(), 1.0;
+				Eigen::Vector3f p1_elbow2d = m*elbow2d;  p1_elbow2d = p1_elbow2d/p1_elbow2d.z();
+				circle(imageKinectWithCoordinates, cv::Point2f(p1_elbow2d.x(), p1_elbow2d.y()), 8, Scalar(0,0,255), -1, 8 );
 
-			//======================Reduce size ==================================
-			// ----------------------- Z axis ------------------------------------
-			pcl::PointCloud<pcl::PointXYZ> cloud_filtered;
-			pcl::PassThrough<pcl::PointXYZ> passZ;
-			passZ.setInputCloud (cloud.makeShared());
-			passZ.setFilterFieldName ("z");
-			passZ.setFilterLimits (T.z() - 0.2, T.z() + 0.2);
-			passZ.filter (cloud_filtered);
-			// ----------------------- Z axis ------------------------------------
-			pcl::PassThrough<pcl::PointXYZ> passY;
-			passY.setInputCloud (cloud_filtered.makeShared());
-			passY.setFilterFieldName ("y");
-			passY.setFilterLimits (T.y() - 0.2, T.y() + 0.2);
-			passY.filter (cloud_filtered);
-			// ----------------------- Z axis ------------------------------------
-			pcl::PassThrough<pcl::PointXYZ> passX;
-			passX.setInputCloud (cloud_filtered.makeShared());
-			passX.setFilterFieldName ("x");
-			passX.setFilterLimits (T.x() - 0.2, T.x() + 0.2);
-			passX.filter (cloud_filtered);
+				Eigen::VectorXf hand2d(4); hand2d << meanHandPosition.x(), meanHandPosition.y(), meanHandPosition.z(), 1.0;
+				Eigen::Vector3f p1_hand2d = m*hand2d;  p1_hand2d = p1_hand2d/p1_hand2d.z();
+				circle(imageKinectWithCoordinates, cv::Point2f(p1_hand2d.x(), p1_hand2d.y()), 8, Scalar(0,0,255), -1, 8 );
 
-			// =======================Get centroid of the hand ============================
-			pcl::PointCloud<pcl::PointXYZ> handComputeCentroid = getHand(dInitialHandSize, cloud_filtered, meanHandPosition);
+				//======================Reduce size ==================================
+				double Delta = 0.2;
+				// ----------------------- Z axis ------------------------------------
+				pcl::PointCloud<pcl::PointXYZ> cloud_filtered;
+				pcl::PassThrough<pcl::PointXYZ> passZ;
+				passZ.setInputCloud (cloud.makeShared());
+				passZ.setFilterFieldName ("z");
+				passZ.setFilterLimits (T.z() -Delta, T.z() + Delta);
+				passZ.filter (cloud_filtered);
+				// ----------------------- Z axis ------------------------------------
+				pcl::PassThrough<pcl::PointXYZ> passY;
+				passY.setInputCloud (cloud_filtered.makeShared());
+				passY.setFilterFieldName ("y");
+				passY.setFilterLimits (T.y() - Delta, T.y() + Delta);
+				passY.filter (cloud_filtered);
+				// ----------------------- Z axis ------------------------------------
+				pcl::PassThrough<pcl::PointXYZ> passX;
+				passX.setInputCloud (cloud_filtered.makeShared());
+				passX.setFilterFieldName ("x");
+				passX.setFilterLimits (T.x() - Delta, T.x() + Delta);
+				passX.filter (cloud_filtered);
 
-			//=============================Compute Centroids=======================================
-			Eigen::Vector4f centroid;
-			if (handComputeCentroid.size() > 0) {
-				pcl::compute3DCentroid(handComputeCentroid,centroid);
-				pcl::PointXYZ pt_centroid = pcl::PointXYZ (centroid[0], centroid[1], centroid[2]);
-				Eigen::Vector3f CentroidHand; CentroidHand<< centroid[0], centroid[1], centroid[2];
+				// =======================Get centroid of the hand ============================
+				pcl::PointCloud<pcl::PointXYZ> handComputeCentroid = getHand(dInitialHandSize, cloud_filtered, meanHandPosition);
 
-				//Plot centroid
-				Eigen::VectorXf centroidHand2d(4); centroidHand2d << CentroidHand.x(), CentroidHand.y(), CentroidHand.z(), 1.0;
-				Eigen::Vector3f p1_centroidHand2d = m*centroidHand2d;  p1_centroidHand2d = p1_centroidHand2d/p1_centroidHand2d.z();
-				circle(imageKinectWithCoordinates, cv::Point2f(p1_centroidHand2d.x(), p1_centroidHand2d.y()), 8, Scalar(0,255,0), -1, 8 );
+				//=============================Compute Centroids=======================================
+				Eigen::Vector4f centroid;
+				if (handComputeCentroid.size() > 0) {
+					pcl::compute3DCentroid(handComputeCentroid,centroid);
+					pcl::PointXYZ pt_centroid = pcl::PointXYZ (centroid[0], centroid[1], centroid[2]);
+					Eigen::Vector3f CentroidHand; CentroidHand<< centroid[0], centroid[1], centroid[2];
 
-				// Use cylindrical filter to remove large part of the arm
-				pcl::PointCloud<pcl::PointXYZ> cylinderCloud;
-				tf::Vector3 cylinder_axis_neutral = tf::Vector3(0.0,0.0,1.0);
-				tf::Vector3 cylinder_axis_target = tf::Vector3(
-						T.x() - Elbow.x(),
-						T.y() - Elbow.y(),
-						T.z() - Elbow.z());
-				cylinder_axis_target.normalize();
-				//cout << "Vector pointing:" << cylinder_axis_target.x() << ", " << cylinder_axis_target.y() << ", " << cylinder_axis_target.z() << endl;
+					//Plot centroid
+					Eigen::VectorXf centroidHand2d(4); centroidHand2d << CentroidHand.x(), CentroidHand.y(), CentroidHand.z(), 1.0;
+					Eigen::Vector3f p1_centroidHand2d = m*centroidHand2d;  p1_centroidHand2d = p1_centroidHand2d/p1_centroidHand2d.z();
+					circle(imageKinectWithCoordinates, cv::Point2f(p1_centroidHand2d.x(), p1_centroidHand2d.y()), 8, Scalar(0,255,0), -1, 8 );
 
-				Eigen::Vector3f tCylinder = Eigen::Vector3f(CentroidHand.x(), CentroidHand.y(), CentroidHand.z());
-				Eigen::Matrix3f rCylinder = getRotation(cylinder_axis_neutral, cylinder_axis_target);
-				cylinderCloud = getCylinder(dRadiusCylinder, cloud_filtered, rCylinder, tCylinder);
+					// Use cylindrical filter to remove large part of the arm
+					pcl::PointCloud<pcl::PointXYZ> cylinderCloud;
+					tf::Vector3 cylinder_axis_neutral = tf::Vector3(0.0,0.0,1.0);
+					tf::Vector3 cylinder_axis_target = tf::Vector3(
+							T.x() - Elbow.x(),
+							T.y() - Elbow.y(),
+							T.z() - Elbow.z());
+					cylinder_axis_target.normalize();
+					//cout << "Vector pointing:" << cylinder_axis_target.x() << ", " << cylinder_axis_target.y() << ", " << cylinder_axis_target.z() << endl;
 
-				//Extract clusters and find closest cluster(==hand)
-				std::vector<pcl::PointIndices> filtered_hand_cluster_indices;
-				filtered_hand_cluster_indices = extractClustersHand(cylinderCloud);
-				//cout << "Number filtered hand cluster indices: " << filtered_hand_cluster_indices.size() << endl;
+					Eigen::Vector3f tCylinder = Eigen::Vector3f(CentroidHand.x(), CentroidHand.y(), CentroidHand.z());
+					Eigen::Matrix3f rCylinder = getRotation(cylinder_axis_neutral, cylinder_axis_target);
+					cylinderCloud = getCylinder(dRadiusCylinder, cloud_filtered, rCylinder, tCylinder);
 
-				pcl::PointCloud<pcl::PointXYZ>::CloudVectorType clusters;
-				std::vector<Eigen::Vector3f> vectorCentroids;
-				for (size_t i = 0; i < filtered_hand_cluster_indices.size (); i++)
-				{
-					if (filtered_hand_cluster_indices[i].indices.size () > 30)
+					//Extract clusters and find closest cluster(==hand)
+					std::vector<pcl::PointIndices> filtered_hand_cluster_indices;
+					filtered_hand_cluster_indices = extractClustersHand(cylinderCloud);
+					//cout << "Number filtered hand cluster indices: " << filtered_hand_cluster_indices.size() << endl;
+
+					pcl::PointCloud<pcl::PointXYZ>::CloudVectorType clusters;
+					std::vector<Eigen::Vector3f> vectorCentroids;
+					for (size_t i = 0; i < filtered_hand_cluster_indices.size (); i++)
 					{
-						pcl::PointCloud<pcl::PointXYZ> cluster;
-						pcl::copyPointCloud (cylinderCloud,filtered_hand_cluster_indices[i].indices,cluster);
-						clusters.push_back (cluster);
+						if (filtered_hand_cluster_indices[i].indices.size () > 30)
+						{
+							pcl::PointCloud<pcl::PointXYZ> cluster;
+							pcl::copyPointCloud (cylinderCloud,filtered_hand_cluster_indices[i].indices,cluster);
+							clusters.push_back (cluster);
 
-						//Compute centroid
-						Eigen::Vector4f centroid;
-						pcl::compute3DCentroid(cluster,centroid);
+							//Compute centroid
+							Eigen::Vector4f centroid;
+							pcl::compute3DCentroid(cluster,centroid);
 
-						Eigen::Vector3f coordinates3d(3);
-						coordinates3d << centroid[0], centroid[1], centroid[2];
-						vectorCentroids.push_back(coordinates3d);
+							Eigen::Vector3f coordinates3d(3);
+							coordinates3d << centroid[0], centroid[1], centroid[2];
+							vectorCentroids.push_back(coordinates3d);
+						}
 					}
-				}
-				double minDistance = 1000;
-				int iNumberHandCluster;
-				for (int i = 0; i<vectorCentroids.size(); i++) {
-					double distance = (vectorCentroids[i] - CentroidHand).norm();
-					if(distance < minDistance) {
-						minDistance = distance;
-						iNumberHandCluster = i;
+					double minDistance = 1000;
+					int iNumberHandCluster;
+					for (int i = 0; i<vectorCentroids.size(); i++) {
+						double distance = (vectorCentroids[i] - CentroidHand).norm();
+						if(distance < minDistance) {
+							minDistance = distance;
+							iNumberHandCluster = i;
+						}
 					}
-				}
-				pcl::copyPointCloud (clusters[iNumberHandCluster], hand);
+					pcl::copyPointCloud (clusters[iNumberHandCluster], hand);
 
-				//Find centroid of new hand
-				pcl::compute3DCentroid(clusters[iNumberHandCluster],centroid);
-				Eigen::Vector3f centroid2; centroid2 << centroid[0], centroid[1], centroid[2];
-				pcl::PointXYZ pt_centroid_handcluster = pcl::PointXYZ (centroid[0], centroid[1], centroid[2]);
-				plotCentroid.push_back(pt_centroid_handcluster);
+					//Find centroid of new hand
+					pcl::compute3DCentroid(clusters[iNumberHandCluster],centroid);
+					Eigen::Vector3f centroid2; centroid2 << centroid[0], centroid[1], centroid[2];
+					pcl::PointXYZ pt_centroid_handcluster = pcl::PointXYZ (centroid[0], centroid[1], centroid[2]);
+					plotCentroid.push_back(pt_centroid_handcluster);
 
-				//----------------------------------------------------------------------------------
-				//TODO: tuning parameter
-				double dRadiusPalm = dHandPalmRatio*(centroid2 - CentroidHand).norm();
-				fingers = filterPalm(dRadiusPalm, clusters[iNumberHandCluster], CentroidHand);
+					//----------------------------------------------------------------------------------
+					//TODO: tuning parameter
+					double dRadiusPalm = dHandPalmRatio*(centroid2 - CentroidHand).norm();
+					fingers = filterPalm(dRadiusPalm, clusters[iNumberHandCluster], CentroidHand);
 
-				//=======================Extract Clusters ====================================
-				std::vector<pcl::PointIndices> hand_cluster_indices;
-				if (fingers.size() > 0) {
-					hand_cluster_indices = extractClusters(fingers);
-					if (hand_cluster_indices.size() > 0) {
-						//==============================Find clusters with largest distance from elbow===========================
-						std::vector<Eigen::Vector4f> vector_centroids_clusters = getCentroidsClusters(hand_cluster_indices, fingers);
+					//=======================Extract Clusters ====================================
+					std::vector<pcl::PointIndices> hand_cluster_indices;
+					if (fingers.size() > 0) {
+						hand_cluster_indices = extractClusters(fingers);
+						if (hand_cluster_indices.size() > 0) {
+							//==============================Find clusters with largest distance from elbow===========================
+							std::vector<Eigen::Vector4f> vector_centroids_clusters = getCentroidsClusters(hand_cluster_indices, fingers);
 
-						int iPointingFinger = getCentroidPointingFinger(Elbow, vector_centroids_clusters);
+							int iPointingFinger = getCentroidPointingFinger(Elbow, vector_centroids_clusters);
 
-						pcl::PointCloud<pcl::PointXYZ> pointingFinger= getCloudPointingFinger(iPointingFinger, hand_cluster_indices, fingers);
+							pcl::PointCloud<pcl::PointXYZ> pointingFinger= getCloudPointingFinger(iPointingFinger, hand_cluster_indices, fingers);
 
-						//==================================Compute eigenvector of finger========================================================
-						pointingDirection = getPointingDirection(iPointingFinger, vector_centroids_clusters, pointingFinger, Elbow);
+							//==================================Compute eigenvector of finger========================================================
+							pointingDirection = getPointingDirection(iPointingFinger, vector_centroids_clusters, pointingFinger, Elbow);
 
-						pcl::PointXYZ p1 = pcl::PointXYZ(pointingDirection[0][0], pointingDirection[0][1], pointingDirection[0][2]);
-						pcl::PointXYZ p2 = pcl::PointXYZ(pointingDirection[0][0]+pointingDirection[1][0], pointingDirection[0][1]+pointingDirection[1][1], pointingDirection[0][2]+pointingDirection[1][2]);
+							pcl::PointXYZ p1 = pcl::PointXYZ(pointingDirection[0][0], pointingDirection[0][1], pointingDirection[0][2]);
+							pcl::PointXYZ p2 = pcl::PointXYZ(pointingDirection[0][0]+pointingDirection[1][0], pointingDirection[0][1]+pointingDirection[1][1], pointingDirection[0][2]+pointingDirection[1][2]);
 
-						plotPointingDirection.push_back(p1);
-						plotPointingDirection.push_back(p2);
-						plotPointingDirection.push_back(pt_centroid);
+							plotPointingDirection.push_back(p1);
+							plotPointingDirection.push_back(p2);
+							plotPointingDirection.push_back(pt_centroid);
 
-						pointingDirection2D = getAndShowPointingDirection2D();
-						publish();
+							pointingDirection2D = getAndShowPointingDirection2D();
+							publish();
+						}
+						else {
+							cout << "No clusters found" << endl;
+						}
 					}
 					else {
-						cout << "No clusters found" << endl;
+						cout << "No fingers found(fingers pointcloud size = 0)" << endl;
 					}
 				}
 				else {
-					cout << "No fingers found(fingers pointcloud size = 0)" << endl;
+					cout << "No hand found" << endl;
+				}
+
+				//----------------------Plot Results----------------------------
+				//Plot 3D restuls only if true;
+				if(bPCLviewer) {
+					pcl::PointCloud<pcl::PointXYZ> plotHandlocation;
+					pcl::PointXYZ pt_hand_position = pcl::PointXYZ ( meanHandPosition.x(),  meanHandPosition.y(),  meanHandPosition.z());
+					plotHandlocation.push_back(pt_hand_position);
+
+					pcl::visualization::PointCloudColorHandlerCustom <pcl::PointXYZ> color_hand_location (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(plotHandlocation), 255, 255, 0);
+					if (!vis_->updatePointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(plotHandlocation), color_hand_location,"Hand location")) {
+						vis_->addPointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(plotHandlocation), color_hand_location,"Hand location");
+						vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 15, "Hand location");
+					}
+
+					pcl::visualization::PointCloudColorHandlerCustom <pcl::PointXYZ> color_cloud_filtered (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(cloud_filtered), 255, 255, 255);
+					if (!vis_->updatePointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(cloud_filtered), color_cloud_filtered,"cloud_filtered")) {
+						vis_->addPointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(cloud_filtered), color_cloud_filtered,"cloud_filtered");
+						vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 0.3, "cloud_filtered");
+					}
+
+					pcl::visualization::PointCloudColorHandlerCustom <pcl::PointXYZ> color_centroid_cluster (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(plotCentroid), 0, 255, 0);
+					if (!vis_->updatePointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(plotCentroid), color_centroid_cluster,"plotCentroid")) {
+						vis_->addPointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(plotCentroid), color_centroid_cluster,"plotCentroid");
+						vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 15, "plotCentroid");
+					}
+
+					pcl::visualization::PointCloudColorHandlerCustom <pcl::PointXYZ> color_hand (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(hand), 255, 0, 255);
+					if (!vis_->updatePointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(hand), color_hand,"hand")) {
+						vis_->addPointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(hand), color_hand,"hand");
+						vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, "hand");
+						vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_OPACITY, 0.3, "hand");
+					}
+
+					pcl::visualization::PointCloudColorHandlerCustom <pcl::PointXYZ> color_fingers (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(fingers), 255, 0, 0);
+					if (!vis_->updatePointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(fingers), color_fingers,"fingers")) {
+						vis_->addPointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(fingers), color_fingers,"fingers");
+						vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, "fingers");
+						vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_OPACITY, 0.3, "fingers");
+					}
+
+					pcl::visualization::PointCloudColorHandlerCustom <pcl::PointXYZ> color_centroid_fingers (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(plotPointingDirection), 0, 0, 255);
+					if (!vis_->updatePointCloud (plotPointingDirection.makeShared(), color_centroid_fingers, "Centroid_fingers")) {
+						vis_->addPointCloud (plotPointingDirection.makeShared(), color_centroid_fingers, "Centroid_fingers");
+						vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 15, "Centroid_fingers");
+					}
+
+					vis_->spinOnce();
+				}
+				//Plot image only if true
+				if(b2Dviewer && (!imageKinectWithCoordinates.empty()) ) {
+					imshow("Pointing Direction in RGB image of the Kinect", imageKinectWithCoordinates);
+					waitKey(3);
 				}
 			}
-			else {
-				cout << "No hand found" << endl;
-			}
-
-			//----------------------Plot Results----------------------------
-			//Plot 3D restuls only if true;
-			if(bPCLviewer) {
-			pcl::visualization::PointCloudColorHandlerCustom <pcl::PointXYZ> color_centroid_cluster (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(plotCentroid), 0, 255, 0);
-				if (!vis_->updatePointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(plotCentroid), color_centroid_cluster,"plotCentroid")) {
-					vis_->addPointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(plotCentroid), color_centroid_cluster,"plotCentroid");
-					vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 15, "plotCentroid");
-				}
-
-				pcl::visualization::PointCloudColorHandlerCustom <pcl::PointXYZ> color_hand (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(hand), 255, 0, 255);
-				if (!vis_->updatePointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(hand), color_hand,"hand")) {
-					vis_->addPointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(hand), color_hand,"hand");
-					vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, "hand");
-					vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_OPACITY, 0.3, "hand");
-				}
-
-				pcl::visualization::PointCloudColorHandlerCustom <pcl::PointXYZ> color_fingers (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(fingers), 255, 0, 0);
-				if (!vis_->updatePointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(fingers), color_fingers,"fingers")) {
-					vis_->addPointCloud (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(fingers), color_fingers,"fingers");
-					vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 3, "fingers");
-					vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_OPACITY, 0.3, "fingers");
-				}
-
-				pcl::visualization::PointCloudColorHandlerCustom <pcl::PointXYZ> color_centroid_fingers (boost::make_shared<pcl::PointCloud<pcl::PointXYZ> >(plotPointingDirection), 0, 0, 255);
-				if (!vis_->updatePointCloud (plotPointingDirection.makeShared(), color_centroid_fingers, "Centroid_fingers")) {
-					vis_->addPointCloud (plotPointingDirection.makeShared(), color_centroid_fingers, "Centroid_fingers");
-					vis_->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 15, "Centroid_fingers");
-				}
-
-				vis_->spinOnce();
-			}
-			//Plot image only if true
-			if(b2Dviewer && (!imageKinectWithCoordinates.empty()) ) {
-				imshow("Pointing Direction in RGB image of the Kinect", imageKinectWithCoordinates);
-				waitKey(3);
-			}
+		}
+		else {
+			ROS_ERROR("Messages unsynchronised. Time difference: %f", (dStampSkeletMsg - dStampCloudMsg));
 		}
 	}
 	clock_t end = clock();
@@ -677,7 +704,7 @@ std::vector<pcl::PointIndices>  Hand::extractClustersHand(pcl::PointCloud<pcl::P
 
 	std::vector<pcl::PointIndices> cluster_indices;
 	pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
-	ec.setClusterTolerance (0.05); // 2cm
+	ec.setClusterTolerance (0.02); // 2cm
 	ec.setMinClusterSize (50);
 	ec.setMaxClusterSize (25000);
 	ec.setSearchMethod (tree);
@@ -764,7 +791,7 @@ Eigen::Matrix3f Hand::getRotation(tf::Vector3 v1, tf::Vector3 v2) {
 }
 int main(int argc, char** argv)
 {
-	ros::init(argc, argv, "Transform_Gaze");
+	ros::init(argc, argv, "Hand_node");
 
 	Hand object;
 	ros::Rate rate(5); // 5Hz
