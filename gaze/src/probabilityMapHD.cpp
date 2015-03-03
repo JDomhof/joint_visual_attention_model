@@ -27,13 +27,10 @@
 #include <geometry_msgs/Point.h>
 #include <geometry_msgs/PointStamped.h>
 
-#include <aruco/aruco.h>
-#include <aruco/cvdrawingutils.h>
 
 #include <numeric>
 using namespace cv;
 using namespace std;
-using namespace aruco;
 
 class CreateProbabilityMapGaze {
 public:
@@ -111,6 +108,7 @@ public:
 	Point2f fromNormalizedToPixelCoordinates(geometry_msgs::PointStamped temp);
 
 	bool checkForMarkers();
+	bool inView(Point2f point);
 
 	void callbackHD(const sensor_msgs::ImageConstPtr& image1);
 	void callbackKinect(const sensor_msgs::ImageConstPtr& image1);
@@ -124,6 +122,7 @@ public:
 	std::vector< DMatch > keypointsKinect();
 	std::vector< DMatch > keypointsHD();
 	void backprojection();
+	Mat backprojectionHD();
 
 	Rect getROI(cv::Point Center,int iSizeWindow);
 	Point2f getCenter(cv::Point Center, int iSizeWindow);
@@ -196,6 +195,7 @@ Point2f CreateProbabilityMapGaze::fromNormalizedToPixelCoordinates(geometry_msgs
 	temp.y = (1-(gaze).point.y) * 720;
 	return temp;
 }
+/*
 bool CreateProbabilityMapGaze::checkForMarkers() {
     bool bMatchMarker = false;
 
@@ -216,15 +216,65 @@ bool CreateProbabilityMapGaze::checkForMarkers() {
     }
 
     return bMatchMarker;
+}*/
+bool CreateProbabilityMapGaze::inView(Point2f point) {
+	bool bInView = false;
+
+	if(point.x > 0 && point.x < imageEye.cols && point.y > 0 && point.y < imageEye.rows) {
+		bInView = true;
+	}
+
+	return bInView;
 }
 void CreateProbabilityMapGaze::transformGaze() {
-	if(!imageKinect.empty() && !imageEye.empty()) {
+	if(inView(gaze_direction_eyetracker) && !imageKinect.empty() && !imageEye.empty()) {
+
+		cout << "Gaze coordinates [pixels]: " << gaze_direction_eyetracker.x << ", " << gaze_direction_eyetracker.y <<  endl;
 
 		clock_t start_synchronizing = clock();
 		if(bUseHD && dMeanDepthObjects!=0) {
 			std::vector< DMatch > matches = keypointsHD();
 			if (matches.size() < iMinimalMatches) {
-				backprojection();
+				Mat probabilityMapHD = backprojectionHD();
+
+				if (!probabilityMapHD.empty()) {
+					//---------------------------Convert to kinect---------------------------
+					Mat mask_thresholded = Mat::zeros(imageHD.size(), CV_8UC1);
+					threshold(probabilityMapHD, mask_thresholded, 127, 255, cv::THRESH_BINARY);
+
+					std::vector<cv::Point2i> locations;
+					int iNumberOfNonZero = countNonZero(mask_thresholded);
+					if(iNumberOfNonZero!=0 && iNumberOfNonZero<10000) {
+						findNonZero(mask_thresholded, locations);
+
+						//---------------------Transform from HD pixels to kinect pixels ------------------------------------
+						Eigen::MatrixXd M_extrinsic_eigen_HD_to_kinect, M_extrinsic_eigen_kinect_to_HD;
+						Eigen::MatrixXd A_kinect_eigen;
+						Eigen::MatrixXd A_hdcamera_eigen;
+						cv::cv2eigen(M_extrinsic_HD_to_kinect,M_extrinsic_eigen_HD_to_kinect);
+						cv::cv2eigen(M_extrinsic_kinect_to_HD,M_extrinsic_eigen_kinect_to_HD);
+						cv::cv2eigen(A_kinect,A_kinect_eigen);
+						cv::cv2eigen(A_hdcamera,A_hdcamera_eigen);
+						double dDepthObject = dMeanDepthObjects*1000;//in mm
+
+						Mat Mask = Mat::zeros(imageKinect.size(), CV_8UC1);
+
+						//Transform keypoints from HD camera pixel coordinates to Kinect RGB image pixel coordinates
+						for(int iNumberOfKeypoints=0; iNumberOfKeypoints < locations.size(); iNumberOfKeypoints++) {
+							//1). Transform HD to HD world camera coordinates using projection matrix HD camera
+							Eigen::Vector3d X_world_hd = A_hdcamera_eigen.inverse() * Eigen::Vector3d(locations[iNumberOfKeypoints].x, locations[iNumberOfKeypoints].y, 1.0) * dDepthObject;
+							//2). Transfrom HD world camera coordinates to kinect world camera coordinates using extrinsic stereo R,T
+							Eigen::Vector3d X_world_kinect = M_extrinsic_eigen_HD_to_kinect * Eigen::Vector4d(X_world_hd.x(), X_world_hd.y(),X_world_hd.z(), 1.0);
+							//3). Transform to kinect pixel coordinates using projection matrix kinect camera
+							Eigen::Vector3d X_pixel_kinect = A_kinect_eigen * X_world_kinect;
+							X_pixel_kinect = X_pixel_kinect/ X_pixel_kinect.z();/**/
+
+							Mask.at<uchar>(Point(X_pixel_kinect.x(), X_pixel_kinect.y())) = imageProbabilityMap.at<uchar>(Point(locations[iNumberOfKeypoints].x, locations[iNumberOfKeypoints].y));
+						}
+
+						Mask.copyTo(imageProbabilityMap);
+					}
+				}
 			}
 		}
 		else {
@@ -238,13 +288,15 @@ void CreateProbabilityMapGaze::transformGaze() {
 
 		//Only when image exists
 		if (imageProbabilityMap.rows > 0 && imageProbabilityMap.cols > 0) {
+			Mat imageEyeWithGaze;
+			imageEye.copyTo(imageEyeWithGaze);
+			circle(imageEyeWithGaze, gaze_direction_eyetracker, 10, Scalar(0,0,255), -1, 8 );
+
+			namedWindow("imageEye", CV_WINDOW_FREERATIO );
+			imshow("imageEye", imageEyeWithGaze);
+			resizeWindow("imageEye", 320, 240);
+
 			if (b2Dviewer) {
-				circle(imageEye, gaze_direction_eyetracker, 10, Scalar(0,0,255), -1, 8 );
-
-				namedWindow("imageEye", CV_WINDOW_FREERATIO );
-				imshow("imageEye", imageEye);
-				resizeWindow("imageEye", 640, 480);
-
 				namedWindow("imageProbabilityMap", CV_WINDOW_FREERATIO );
 				imshow("imageProbabilityMap", imageProbabilityMap);
 				resizeWindow("imageProbabilityMap", 640, 480);
@@ -255,6 +307,124 @@ void CreateProbabilityMapGaze::transformGaze() {
 		}
 		waitKey(3);
 	}
+}
+Mat CreateProbabilityMapGaze::backprojectionHD() {
+	previous_gaze.erase(previous_gaze.begin());
+	previous_gaze.push_back(gaze_direction_eyetracker);
+
+	Mat probabilityMapHD;
+
+	if (previous_gaze.at(0) != Point2f(0,0)) {
+		// downsample the image
+		Mat downsampled_half;
+		Mat downsampled;
+
+		//int sizeDownsampledTotal = 4;
+		//cv::pyrDown(imageEye, downsampled_half, cv::Size(imageEye.cols/2, imageEye.rows/2));
+		//cv::pyrDown(downsampled_half, downsampled, cv::Size(downsampled_half.cols/2, downsampled_half.rows/2));
+
+		int sizeDownsampledTotal = 2;
+		cv::pyrDown(imageEye, downsampled, cv::Size(imageEye.cols/2, imageEye.rows/2));
+
+		cv::Point2f zero(0.0f, 0.0f);
+		cv::Point2f sum  = std::accumulate(previous_gaze.begin(), previous_gaze.end(), zero);
+		Point2f mean_point(sum.x / previous_gaze.size(), sum.y / previous_gaze.size());
+
+		Rect roi = getROI(Point(mean_point.x/sizeDownsampledTotal, mean_point.y/sizeDownsampledTotal), 50);
+		cout << "ROI: " << roi.x << ", " << roi.y << ", " << roi.width << ", " << roi.height << endl;
+
+		Mat maskGrabcut;
+		Mat bgModel,fgModel;
+		//In this case the foreground and backgroudn model are not used, possibly done by using gaze points.
+		grabCut( downsampled, maskGrabcut, roi, bgModel,fgModel, 1, cv::GC_INIT_WITH_RECT );
+		cv::compare(maskGrabcut,cv::GC_PR_FGD,maskGrabcut,cv::CMP_EQ);
+
+	    cv::Mat foreground(downsampled.size(),CV_8UC3,cv::Scalar(255,255,255));
+	    downsampled.copyTo(foreground,maskGrabcut); // bg pixels not copied
+
+	    if (b2Dviewer) {
+	    	imshow("foreground", foreground);
+	    }
+	    Mat backproj;
+	    int iNumberOfChannels = 2;
+	    if (iNumberOfChannels == 1) {
+	    	//cout << "Hue and Saturation" << endl;
+
+	    	//---------------------Back Projection---------------------
+	    	Mat hsv_roi;
+	    	Mat hist;
+	    	cvtColor( foreground, hsv_roi, COLOR_BGR2HSV );
+
+	    	int histSize = MAX( 100, 2 );
+	    	float h_range[] = { 0, 179 };
+	    	const float* ranges[] = { h_range };
+	    	int channels[] = {0};
+
+	    	/// Get the Histogram and normalize it
+	    	calcHist( &hsv_roi, 1, channels, maskGrabcut, hist, 1, &histSize, ranges, true, false );
+	    	normalize( hist, hist, 0, 255, NORM_MINMAX, -1, Mat() );
+
+	    	//
+	    	Mat hsv_target;
+	    	cvtColor( imageHD, hsv_target, COLOR_BGR2HSV );
+	    	calcBackProject( &hsv_target, 1, channels, hist, backproj, ranges, 1, true );
+	    	//imshow("Back Projection", backproj);
+		}
+	    else if (iNumberOfChannels ==2) {
+	    	//cout << "Hue and Value" << endl;
+
+	    	//---------------------Back Projection---------------------
+	    	Mat hsv_roi;
+	    	Mat hist;
+	    	cvtColor( foreground, hsv_roi, COLOR_BGR2HSV );
+
+	    	int histSize = MAX( 100, 2 );
+	    	float h_range[] = { 0, 179 };
+	    	float s_range[] = { 0, 255 };
+	    	const float* ranges[] = { h_range, s_range };
+	    	int channels[] = { 0, 1 };
+
+	    	/// Get the Histogram and normalize it
+	    	calcHist( &hsv_roi, 1, channels, maskGrabcut, hist, 2, &histSize, ranges, true, false );
+	    	normalize( hist, hist, 0, 255, NORM_MINMAX, -1, Mat() );
+
+	    	//
+	    	Mat hsv_target;
+	    	cvtColor( imageHD, hsv_target, COLOR_BGR2HSV );
+
+	    	calcBackProject( &hsv_target, 1, channels, hist, backproj, ranges, 1, true );
+	    	//imshow("Back Projection", backproj);
+
+	    	cout << "Line 350" << endl;
+	    }
+	    else {
+			cout << "No valid value for iNumberOfChannels" << endl;
+		}
+
+	    bool bFilter = false;
+	    Mat mask;
+	    if(bFilter) {
+	    	threshold(backproj, mask, 0, 255, THRESH_BINARY);
+
+	    	int morph_size1 = 3;
+	    	Mat element1 = getStructuringElement( 0, Size( 2*morph_size1 + 1, 2*morph_size1+1 ), Point( morph_size1, morph_size1 ) );
+	    	morphologyEx(mask, mask, MORPH_OPEN, element1);
+
+	    	int morph_size2 = 5;
+	    	Mat element2 = getStructuringElement( 0, Size( 2*morph_size2 + 1, 2*morph_size2+1 ), Point( morph_size2, morph_size2 ) );
+	    	morphologyEx(mask, mask, MORPH_CLOSE, element2);
+	    	morphologyEx(mask, mask, MORPH_DILATE, element2, Point(), 2);
+
+	    	Mat backprojection;
+	    	backproj.copyTo(backprojection, mask);
+	    	backprojection.copyTo(backproj);
+	    	//imshow("Filtered backproj", backproj);
+	    }
+	    backproj.copyTo(probabilityMapHD);
+		//------------------------------------------------------
+	    cv::normalize(backproj, backproj, 0, 255, NORM_MINMAX, CV_8UC1);
+	}
+	return probabilityMapHD;
 }
 void CreateProbabilityMapGaze::backprojection() {
 	previous_gaze.erase(previous_gaze.begin());
@@ -287,13 +457,6 @@ void CreateProbabilityMapGaze::backprojection() {
 
 	    cv::Mat foreground(downsampled.size(),CV_8UC3,cv::Scalar(255,255,255));
 	    downsampled.copyTo(foreground,maskGrabcut); // bg pixels not copied
-
-	    if (b2Dviewer) {
-			//Show foreground
-			//namedWindow("Foreground", CV_WINDOW_NORMAL);
-			//imshow("Foreground", foreground);
-			//resizeWindow("Foreground", 640, 480);
-		}
 
 	    Mat backproj;
 	    int iNumberOfChannels = 2;
@@ -489,6 +652,7 @@ std::vector< DMatch > CreateProbabilityMapGaze::keypointsHD() {
 				keypoints_scene_kinect, filtered_matches, img_matches_kinect, Scalar::all(-1),
 				Scalar::all(-1), vector<char>(),
 				DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
+		namedWindow("Good matches feature points in Kinect frame", CV_WINDOW_FREERATIO );
 		imshow("Good matches feature points in Kinect frame", img_matches_kinect);
 
 		drawMatches(object, keypoints_object, imageHD,
